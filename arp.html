@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ARP in Action</title>
+<style>
+:root{
+  --bg:#0a1420; --panel:#0f1e2e; --panel2:#132840; --line:#1d3a56;
+  --text:#d7e3ee; --dim:#7f9bb4; --cyan:#4fd1ff; --amber:#ffb454;
+  --green:#5fe68c; --red:#ff5c6c; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: light){ :root:not([data-theme="dark"]){ --bg:#0a1420; } }
+*{box-sizing:border-box;}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+body{padding:28px 20px 60px;}
+h1{font-size:clamp(28px,5vw,42px);margin:0 0 4px;font-weight:700;letter-spacing:-0.02em;}
+.sub{color:var(--dim);margin:0 0 28px;font-size:15px;max-width:640px;line-height:1.5;}
+.wrap{max-width:1320px;margin:0 auto;}
+section{margin-bottom:48px;}
+h2{font-size:20px;margin:0 0 6px;font-weight:650;}
+.note{color:var(--dim);font-size:14px;margin:0 0 18px;max-width:680px;line-height:1.55;}
+.grid{display:grid;grid-template-columns:1.3fr 1fr;gap:18px;}
+@media(max-width:760px){.grid{grid-template-columns:1fr;}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;}
+svg{width:100%;height:auto;display:block;}
+.lbl{font-family:var(--mono);font-size:12.5px;fill:var(--dim);}
+.ip{font-family:var(--mono);font-size:12.5px;fill:var(--cyan);}
+.mac{font-family:var(--mono);font-size:11px;fill:var(--amber);}
+.node-box{fill:var(--panel2);stroke:var(--line);stroke-width:1.5;}
+.node-box.active{stroke:var(--cyan);}
+.node-box.heard{stroke:var(--amber);}
+.node-box.poisoned{stroke:var(--red);}
+.edge{stroke:var(--line);stroke-width:1.5;fill:none;}
+.cloud{fill:#0c1d2c;stroke:var(--line);}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px;}
+select,input[type=text],button{
+  background:var(--panel2);color:var(--text);border:1px solid var(--line);
+  border-radius:7px;padding:8px 10px;font-size:13px;font-family:var(--sans);
+}
+input[type=text]{font-family:var(--mono);width:150px;}
+button{cursor:pointer;background:var(--cyan);color:#06111c;font-weight:650;border:none;}
+button:hover{filter:brightness(1.08);}
+button.secondary{background:var(--panel2);color:var(--text);border:1px solid var(--line);}
+button.danger{background:var(--red);color:#1a0505;}
+button:disabled{opacity:.35;cursor:not-allowed;}
+button.ready{border-color:var(--cyan);box-shadow:0 0 0 2px rgba(79,209,255,.25);}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12.5px;margin-top:10px;}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;}
+th{color:var(--dim);font-weight:600;font-size:11px;text-transform:none;}
+td input{width:100%;background:transparent;border:1px solid transparent;color:var(--text);padding:3px 4px;border-radius:4px;font-family:var(--mono);font-size:12.5px;}
+td input:focus{border-color:var(--cyan);outline:none;}
+.rowbtn{background:none;border:none;color:var(--dim);cursor:pointer;font-size:14px;padding:2px 6px;}
+.rowbtn:hover{color:var(--red);}
+.log{background:#081220;border:1px solid var(--line);border-radius:8px;padding:12px;font-family:var(--mono);font-size:12px;line-height:1.75;height:200px;overflow-y:auto;}
+.log div{opacity:0;animation:fade .3s forwards;}
+@keyframes fade{to{opacity:1;}}
+.log .req{color:var(--amber);}
+.log .rep{color:var(--green);}
+.log .send{color:var(--cyan);}
+.log .warn{color:var(--red);}
+.log .dim{color:var(--dim);}
+.pkt{filter:drop-shadow(0 0 4px currentColor);}
+.framerow{display:flex;justify-content:space-between;align-items:baseline;font-family:var(--mono);font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--line);gap:10px;}
+.framerow:last-child{border-bottom:none;}
+.framekey{color:var(--dim);white-space:nowrap;}
+.frameval{color:var(--cyan);text-align:right;}
+.frameval.flash{animation:flashVal 1s ease;}
+@keyframes flashVal{0%{color:var(--amber);text-shadow:0 0 6px var(--amber);}100%{color:var(--cyan);text-shadow:none;}}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:10px;}
+.legend span{display:inline-flex;align-items:center;gap:6px;}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+@media (prefers-reduced-motion: reduce){ .pkt{animation:none !important;} }
+footer{color:var(--dim);font-size:12px;text-align:center;margin-top:40px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ARP in Action</h1>
+  <p class="sub">A small simulated LAN. Watch how a host resolves an IP address to a MAC address before it can send a frame — and how that process gets abused in an ARP poisoning attack. Everything here runs locally in your browser against a fake network; nothing touches a real interface.</p>
+
+  <section>
+    <h2>1 — Resolving an address</h2>
+    <div class="grid" style="grid-template-columns:1.5fr 1fr;align-items:start;">
+      <div class="panel">
+        <svg id="lanSvg" viewBox="0 0 560 300" style="max-height:420px;"></svg>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--amber)"></i>ARP request (broadcast)</span>
+          <span><i class="dot" style="background:var(--green)"></i>ARP reply</span>
+          <span><i class="dot" style="background:var(--cyan)"></i>data frame</span>
+        </div>
+        <div class="controls" style="margin-top:14px;">
+          <button id="lanNext" type="button" disabled>Next step →</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="panel">
+          <p class="note" style="margin:0;max-width:none;">Pick a sender and a destination IP. If the destination is on the same subnet (10.0.0.0/24), the sender ARPs for it directly. If it's outside the subnet, the sender ARPs for the <b>gateway</b> instead and hands the frame to the router, which forwards it onward.</p>
+        </div>
+        <div class="panel log" id="lanLog" style="margin-top:0;"></div>
+      </div>
+    </div>
+    <div class="controls">
+      <select id="srcSel">
+        <option value="A">Send from PC-A (10.0.0.10)</option>
+        <option value="B">Send from PC-B (10.0.0.20)</option>
+        <option value="C">Send from PC-C (10.0.0.30)</option>
+      </select>
+      <input type="text" id="destIp" value="10.0.0.20" placeholder="destination IP">
+      <button id="sendBtn" type="button">Send packet</button>
+      <button class="secondary" id="tryOutside" type="button">Try an outside IP</button>
+    </div>
+    <div class="panel" style="margin-top:18px;max-width:460px;">
+      <div style="font-size:13px;color:var(--dim);margin-bottom:4px;">ARP cache — <span id="cacheOwner">PC-A</span></div>
+      <table id="arpTable">
+        <thead><tr><th>IP address</th><th>MAC address</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="controls" style="margin-top:8px;">
+        <button class="secondary" id="addRow" type="button">+ add entry</button>
+        <button class="secondary" id="clearCache" type="button">clear cache</button>
+      </div>
+      <p class="note" style="margin-top:12px;margin-bottom:0;">Edit the table directly — it's the sender's live cache. A matching entry here skips the broadcast; an empty or wrong one forces a fresh ARP request.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 — Why the MAC address changes at each hop</h2>
+    <div class="grid" style="grid-template-columns:1.5fr 1fr;align-items:start;">
+      <div class="panel">
+        <svg id="hopSvg" viewBox="0 0 560 220" style="max-height:320px;"></svg>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--cyan)"></i>frame, relabeled at each hop</span>
+        </div>
+        <div class="controls" style="margin-top:14px;">
+          <button id="hopBtn" type="button">Show hop</button>
+          <button id="hopNext" type="button" disabled>Next step →</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="panel">
+          <p class="note" style="margin:0;max-width:none;">A frame's <b>MAC</b> addresses only have to make sense for the current wire — each device that forwards it swaps in a fresh source/destination MAC pair for the next hop. The <b>IP</b> addresses are different: they identify the original sender and the final destination, so they stay the same for the whole trip, all the way to the outside server.</p>
+        </div>
+        <div class="panel">
+          <div style="font-size:12px;color:var(--dim);margin-bottom:2px;">frame currently on the wire</div>
+          <div class="framerow"><span class="framekey">Ethernet src → dst</span><span class="frameval" id="ethVal">—</span></div>
+          <div class="framerow"><span class="framekey">IP src → dst (unchanged)</span><span class="frameval" id="ipVal" style="color:var(--dim);">—</span></div>
+        </div>
+        <div class="panel log" id="hopLog" style="margin-top:0;"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 — ARP poisoning (man-in-the-middle)</h2>
+    <div class="grid" style="grid-template-columns:1.5fr 1fr;align-items:start;">
+      <div class="panel">
+        <svg id="poisonSvg" viewBox="0 0 560 300" style="max-height:420px;"></svg>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--red)"></i>forged ARP reply</span>
+          <span><i class="dot" style="background:var(--cyan)"></i>intercepted traffic</span>
+        </div>
+        <div class="controls" style="margin-top:14px;">
+          <button id="poisonNext" type="button" disabled>Next step →</button>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="panel">
+          <p class="note" style="margin:0;max-width:none;">ARP has no authentication — any host can claim to own any IP. In this attack the attacker sends forged, unsolicited ARP replies to both the victim and the gateway: it tells the victim "I'm the gateway" and tells the gateway "I'm the victim." Both caches update, and traffic that should flow straight across the LAN now detours through the attacker.</p>
+        </div>
+        <div class="panel log" id="poisonLog" style="margin-top:0;"></div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="poisonBtn" type="button">Run attack</button>
+      <button class="secondary" id="poisonReset" type="button">Reset</button>
+    </div>
+    <p class="note" style="margin-top:14px;">Mitigations used in real networks: static ARP entries for critical hosts, Dynamic ARP Inspection on managed switches, port security, and encrypted transport (TLS) so an intercepted packet still isn't readable.</p>
+  </section>
+</div>
+<footer>Simulated topology — educational visualization only.</footer>
+
+<script>
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
+
+const nextResolvers={};
+function waitNext(btnId){
+  const btn=document.getElementById(btnId);
+  btn.disabled=false; btn.classList.add('ready');
+  return new Promise(res=>{ nextResolvers[btnId]=res; });
+}
+function hookNextBtn(btnId){
+  document.getElementById(btnId).onclick=()=>{
+    const r=nextResolvers[btnId];
+    if(!r)return;
+    const btn=document.getElementById(btnId);
+    btn.disabled=true; btn.classList.remove('ready');
+    nextResolvers[btnId]=null;
+    r();
+  };
+}
+
+/* ---------- LAN diagram ---------- */
+const lan = {A:{x:70,y:55},B:{x:70,y:150},C:{x:70,y:245},R:{x:340,y:150},OUT:{x:500,y:150}};
+const lanSvg = document.getElementById('lanSvg');
+const LAN_CX=210;
+function curveBetween(a,b){return `M${a.x+55},${a.y} C${LAN_CX},${a.y} ${LAN_CX},${b.y} ${b.x-55},${b.y}`;}
+function drawLan(){
+  lanSvg.innerHTML='';
+  lanSvg.appendChild(el('path',{d:curveBetween(lan.A,lan.R),class:'edge'}));
+  lanSvg.appendChild(el('path',{d:curveBetween(lan.B,lan.R),class:'edge'}));
+  lanSvg.appendChild(el('path',{d:curveBetween(lan.C,lan.R),class:'edge'}));
+  lanSvg.appendChild(el('line',{x1:lan.R.x+55,y1:lan.R.y,x2:lan.OUT.x-60,y2:lan.OUT.y,class:'edge'}));
+  const cloud = el('ellipse',{cx:lan.OUT.x,cy:lan.OUT.y,rx:58,ry:42,class:'cloud'});
+  lanSvg.appendChild(cloud);
+  node(lanSvg,lan.A,'PC-A','10.0.0.10','AA:10');
+  node(lanSvg,lan.B,'PC-B','10.0.0.20','AA:20');
+  node(lanSvg,lan.C,'PC-C','10.0.0.30','AA:30');
+  node(lanSvg,lan.R,'Router','10.0.0.1','AA:01');
+  const t1=el('text',{x:lan.OUT.x,y:lan.OUT.y-4,class:'lbl','text-anchor':'middle'});t1.textContent='outside network';lanSvg.appendChild(t1);
+  const t2=el('text',{x:lan.OUT.x,y:lan.OUT.y+12,class:'ip','text-anchor':'middle'});t2.textContent='203.0.113.50';lanSvg.appendChild(t2);
+}
+function node(svg,p,name,ip,mac){
+  const g=el('g',{id:'n_'+name});
+  g.appendChild(el('rect',{x:p.x-55,y:p.y-26,width:110,height:52,rx:8,class:'node-box'}));
+  const t1=el('text',{x:p.x,y:p.y-6,class:'lbl','text-anchor':'middle'});t1.textContent=name;g.appendChild(t1);
+  const t2=el('text',{x:p.x,y:p.y+9,class:'ip','text-anchor':'middle'});t2.textContent=ip;g.appendChild(t2);
+  const t3=el('text',{x:p.x,y:p.y+22,class:'mac','text-anchor':'middle'});t3.textContent=mac;g.appendChild(t3);
+  svg.appendChild(g);
+}
+drawLan();
+
+function flashNode(svg,name,cls){
+  const box=svg.querySelector('#n_'+name+' rect');
+  if(!box)return;
+  box.classList.add(cls);
+  setTimeout(()=>box.classList.remove(cls),900);
+}
+function easeInOutCubic(t){return -(Math.cos(Math.PI*t)-1)/2;}
+function packet(svg,from,to,color,curve,label){
+  label=label||'';
+  const path=el('path',{d:curve||`M${from.x},${from.y} L${to.x},${to.y}`});
+  const len=path.getTotalLength?path.getTotalLength():Math.hypot(to.x-from.x,to.y-from.y);
+  const TRAIL=9, trailDots=[], hist=[];
+  for(let i=0;i<TRAIL;i++){
+    const d=el('circle',{r:Math.max(0.6,3-i*0.4),fill:color,opacity:(1-i/TRAIL)*0.35});
+    svg.appendChild(d); trailDots.push(d);
+  }
+  const g=el('g',{class:'pkt'});
+  g.appendChild(el('circle',{r:7,fill:color,opacity:0.22}));
+  g.appendChild(el('circle',{r:4,fill:color}));
+  if(label){
+    const txt=el('text',{x:0,y:-12,'text-anchor':'middle',class:'mac'});
+    txt.setAttribute('style',`fill:${color};font-size:9.5px;letter-spacing:.02em;`);
+    txt.textContent=label;
+    g.appendChild(txt);
+  }
+  svg.appendChild(g);
+  const dur=1850; const start=performance.now();
+  return new Promise(res=>{
+    function step(now){
+      const t=Math.min(1,(now-start)/dur), et=easeInOutCubic(t);
+      let pt,ang=0;
+      if(path.getPointAtLength){
+        pt=path.getPointAtLength(et*len);
+        const p2=path.getPointAtLength(Math.min(len,et*len+1));
+        ang=Math.atan2(p2.y-pt.y,p2.x-pt.x)*180/Math.PI;
+      } else {
+        pt={x:from.x+(to.x-from.x)*et,y:from.y+(to.y-from.y)*et};
+      }
+      g.setAttribute('transform',`translate(${pt.x},${pt.y})`);
+      hist.unshift({x:pt.x,y:pt.y});
+      if(hist.length>TRAIL)hist.pop();
+      trailDots.forEach((d,i)=>{const h=hist[i];if(h){d.setAttribute('cx',h.x);d.setAttribute('cy',h.y);}});
+      if(t<1){requestAnimationFrame(step);}
+      else{
+        const ring=el('circle',{cx:pt.x,cy:pt.y,r:6,fill:'none',stroke:color,'stroke-width':2,opacity:'0.8'});
+        svg.appendChild(ring);
+        const rs=performance.now();
+        (function pulse(n){
+          const pp=Math.min(1,(n-rs)/420);
+          ring.setAttribute('r',6+pp*20);
+          ring.setAttribute('opacity',0.8*(1-pp));
+          if(pp<1)requestAnimationFrame(pulse); else ring.remove();
+        })(rs);
+        g.remove(); trailDots.forEach(d=>d.remove());
+        res();
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+/* ARP cache for PC-A, editable */
+let cache=[{ip:'10.0.0.1',mac:'AA:01'}];
+const tbody=document.querySelector('#arpTable tbody');
+function renderCache(){
+  tbody.innerHTML='';
+  cache.forEach((row,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td><input value="${row.ip}" data-i="${i}" data-f="ip"></td>
+                  <td><input value="${row.mac}" data-i="${i}" data-f="mac"></td>
+                  <td><button class="rowbtn" data-del="${i}" title="remove">✕</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+renderCache();
+tbody.addEventListener('input',e=>{
+  const i=e.target.dataset.i, f=e.target.dataset.f;
+  if(i!==undefined) cache[i][f]=e.target.value;
+});
+tbody.addEventListener('click',e=>{
+  if(e.target.dataset.del!==undefined){cache.splice(+e.target.dataset.del,1);renderCache();}
+});
+document.getElementById('addRow').onclick=()=>{cache.push({ip:'',mac:''});renderCache();};
+document.getElementById('clearCache').onclick=()=>{cache=[];renderCache();};
+
+const lanLog=document.getElementById('lanLog');
+function logLine(container,cls,text){
+  const d=document.createElement('div');
+  d.className=cls; d.textContent=text;
+  container.appendChild(d);
+  container.scrollTop=container.scrollHeight;
+}
+
+const KNOWN={'10.0.0.10':{name:'A',mac:'AA:10'},'10.0.0.20':{name:'B',mac:'AA:20'},'10.0.0.30':{name:'C',mac:'AA:30'},'10.0.0.1':{name:'R',mac:'AA:01'}};
+const SRC_IP={A:'10.0.0.10',B:'10.0.0.20',C:'10.0.0.30'};
+document.getElementById('srcSel').addEventListener('change',e=>{
+  document.getElementById('cacheOwner').textContent='PC-'+e.target.value;
+});
+
+let busy=false;
+async function sendPacket(src,destIp){
+  if(busy)return; busy=true;
+  document.getElementById('sendBtn').disabled=true;
+  lanLog.innerHTML='';
+  const srcNode = lan[src];
+  const srcName = src;
+  const subnet = destIp.startsWith('10.0.0.');
+  logLine(lanLog,'dim',`PC-${srcName} (${SRC_IP[src]}) wants to reach ${destIp}`);
+
+  if(subnet && KNOWN[destIp] && KNOWN[destIp].name!==srcName){
+    // local resolution
+    const cached=cache.find(r=>r.ip===destIp && r.mac);
+    if(cached){
+      await waitNext('lanNext');
+      logLine(lanLog,'dim',`cache hit: ${destIp} is at ${cached.mac} — skipping ARP`);
+    } else {
+      const targetName=KNOWN[destIp].name;
+      const others=Object.keys(lan).filter(k=>k!==src && k!=='OUT');
+      await waitNext('lanNext');
+      logLine(lanLog,'req',`ARP broadcast from ${srcName}: who has ${destIp}? (sent to every host on the LAN)`);
+      await Promise.all(others.map(async k=>{
+        await packet(lanSvg,srcNode,lan[k],'var(--amber)',curveBetween(srcNode,lan[k]),'ARP who-has?');
+        flashNode(lanSvg,k,'heard');
+      }));
+      const bystanders=others.filter(k=>k!==targetName && k!=='R');
+      if(bystanders.length) logLine(lanLog,'dim',`${bystanders.map(k=>'PC-'+k).join(' and ')} hear it too, but it's not their IP — they stay silent`);
+      await waitNext('lanNext');
+      logLine(lanLog,'rep',`${destIp} replies directly to ${srcName}: it's at ${KNOWN[destIp].mac}`);
+      await packet(lanSvg,lan[targetName],srcNode,'var(--green)',curveBetween(lan[targetName],srcNode),'ARP is-at');
+      flashNode(lanSvg,targetName,'active');
+      cache.push({ip:destIp,mac:KNOWN[destIp].mac}); renderCache();
+    }
+    const destNode = lan[KNOWN[destIp].name];
+    await waitNext('lanNext');
+    logLine(lanLog,'send',`data frame sent directly, dest MAC = ${KNOWN[destIp].mac}`);
+    await packet(lanSvg,srcNode,destNode,'var(--cyan)',curveBetween(srcNode,destNode),'DATA');
+    flashNode(lanSvg,KNOWN[destIp].name,'active');
+  } else if(!subnet){
+    await waitNext('lanNext');
+    logLine(lanLog,'dim',`${destIp} is outside 10.0.0.0/24 → needs the gateway`);
+    const gwCached = cache.find(r=>r.ip==='10.0.0.1'&&r.mac);
+    if(gwCached){
+      await waitNext('lanNext');
+      logLine(lanLog,'dim',`cache hit: gateway is at ${gwCached.mac}`);
+    } else {
+      await waitNext('lanNext');
+      logLine(lanLog,'req',`ARP: who has 10.0.0.1 (gateway)?`);
+      await packet(lanSvg,srcNode,lan.R,'var(--amber)',null,'ARP who-has?');
+      await waitNext('lanNext');
+      logLine(lanLog,'rep',`gateway replies: AA:01`);
+      await packet(lanSvg,lan.R,srcNode,'var(--green)',null,'ARP is-at');
+      cache.push({ip:'10.0.0.1',mac:'AA:01'}); renderCache();
+    }
+    await waitNext('lanNext');
+    logLine(lanLog,'send',`frame sent to gateway (dest MAC = AA:01), IP header keeps ${destIp}`);
+    await packet(lanSvg,srcNode,lan.R,'var(--cyan)',null,'DATA');
+    flashNode(lanSvg,'R','active');
+    await waitNext('lanNext');
+    logLine(lanLog,'send',`router forwards it off-LAN toward ${destIp}`);
+    await packet(lanSvg,lan.R,lan.OUT,'var(--cyan)',null,'DATA');
+  } else {
+    logLine(lanLog,'warn',`${destIp} isn't a host on this demo LAN — try 10.0.0.10, 10.0.0.20, 10.0.0.30, or an outside address`);
+  }
+  document.getElementById('lanNext').disabled=true;
+  document.getElementById('lanNext').classList.remove('ready');
+  busy=false; document.getElementById('sendBtn').disabled=false;
+}
+document.getElementById('sendBtn').onclick=()=>{
+  const src=document.getElementById('srcSel').value;
+  const dest=document.getElementById('destIp').value.trim();
+  sendPacket(src,dest);
+};
+document.getElementById('tryOutside').onclick=()=>{
+  document.getElementById('destIp').value='203.0.113.50';
+  sendPacket(document.getElementById('srcSel').value,'203.0.113.50');
+};
+
+/* ---------- Poisoning diagram ---------- */
+const pz = {V:{x:70,y:70},G:{x:500,y:70},M:{x:285,y:230}};
+const pSvg = document.getElementById('poisonSvg');
+function drawPoison(){
+  pSvg.innerHTML='';
+  pSvg.appendChild(el('line',{id:'edgeDirect',x1:pz.V.x+55,y1:pz.V.y,x2:pz.G.x-55,y2:pz.G.y,class:'edge'}));
+  pSvg.appendChild(el('line',{x1:pz.V.x,y1:pz.V.y+26,x2:pz.M.x-30,y2:pz.M.y-20,class:'edge'}));
+  pSvg.appendChild(el('line',{x1:pz.G.x,y1:pz.G.y+26,x2:pz.M.x+30,y2:pz.M.y-20,class:'edge'}));
+  node(pSvg,pz.V,'Victim','10.0.0.20','AA:20');
+  node(pSvg,pz.G,'Gateway','10.0.0.1','AA:01');
+  node(pSvg,pz.M,'Attacker','10.0.0.66','EE:66');
+}
+drawPoison();
+const poisonLog=document.getElementById('poisonLog');
+let poisoned=false, pBusy=false;
+
+function cacheLine(container,who,ip,mac,bad){
+  logLine(container, bad?'warn':'dim', `${who}'s cache: ${ip} → ${mac}${bad?'  (poisoned)':''}`);
+}
+
+document.getElementById('poisonBtn').onclick=async()=>{
+  if(pBusy)return; pBusy=true;
+  poisonLog.innerHTML='';
+  document.getElementById('edgeDirect').style.opacity=1;
+
+  logLine(poisonLog,'dim','normal traffic: Victim ↔ Gateway, direct');
+  await packet(pSvg,pz.V,pz.G,'var(--cyan)',null,'DATA');
+  cacheLine(poisonLog,'Victim','10.0.0.1','AA:01',false);
+  cacheLine(poisonLog,'Gateway','10.0.0.20','AA:20',false);
+
+  await waitNext('poisonNext');
+  logLine(poisonLog,'warn','Attacker broadcasts unsolicited ARP replies (no request needed):');
+  logLine(poisonLog,'warn','  "10.0.0.1 is at EE:66" → sent to Victim');
+  await packet(pSvg,pz.M,pz.V,'var(--red)',null,'ARP is-at (forged)');
+  flashNode(pSvg,'Victim','poisoned');
+
+  await waitNext('poisonNext');
+  logLine(poisonLog,'warn','  "10.0.0.20 is at EE:66" → sent to Gateway');
+  await packet(pSvg,pz.M,pz.G,'var(--red)',null,'ARP is-at (forged)');
+  flashNode(pSvg,'Gateway','poisoned');
+
+  await waitNext('poisonNext');
+  cacheLine(poisonLog,'Victim','10.0.0.1','EE:66',true);
+  cacheLine(poisonLog,'Gateway','10.0.0.20','EE:66',true);
+  document.getElementById('edgeDirect').style.opacity=0.15;
+  poisoned=true;
+
+  await waitNext('poisonNext');
+  logLine(poisonLog,'send','traffic between Victim and Gateway now detours through the attacker:');
+  await packet(pSvg,pz.V,pz.M,'var(--cyan)',null,'DATA');
+  await packet(pSvg,pz.M,pz.G,'var(--cyan)',null,'DATA');
+  logLine(poisonLog,'warn','the attacker can read or alter every frame before relaying it — a classic MITM position');
+
+  document.getElementById('poisonNext').disabled=true;
+  document.getElementById('poisonNext').classList.remove('ready');
+  pBusy=false;
+};
+document.getElementById('poisonReset').onclick=()=>{
+  poisoned=false; poisonLog.innerHTML='';
+  document.getElementById('edgeDirect').style.opacity=1;
+  drawPoison();
+  document.getElementById('poisonNext').disabled=true;
+  document.getElementById('poisonNext').classList.remove('ready');
+  nextResolvers['poisonNext']=null;
+};
+/* ---------- MAC-per-hop diagram ---------- */
+const hz = {PC:{x:70,y:110},R:{x:285,y:110},OUT:{x:500,y:110}};
+const hopSvg = document.getElementById('hopSvg');
+function drawHop(){
+  hopSvg.innerHTML='';
+  hopSvg.appendChild(el('line',{x1:hz.PC.x+55,y1:hz.PC.y,x2:hz.R.x-55,y2:hz.R.y,class:'edge'}));
+  hopSvg.appendChild(el('line',{x1:hz.R.x+55,y1:hz.R.y,x2:hz.OUT.x-42,y2:hz.OUT.y,class:'edge'}));
+  node(hopSvg,hz.PC,'PC','10.0.0.10','AA:10');
+  node(hopSvg,hz.R,'Router','10.0.0.1','AA:01');
+  hopSvg.appendChild(el('ellipse',{cx:hz.OUT.x,cy:hz.OUT.y,rx:42,ry:32,class:'cloud'}));
+  const t1=el('text',{x:hz.OUT.x,y:hz.OUT.y-9,class:'lbl','text-anchor':'middle'});t1.textContent='outside server';hopSvg.appendChild(t1);
+  const t2=el('text',{x:hz.OUT.x,y:hz.OUT.y+6,class:'ip','text-anchor':'middle',style:'font-size:10.5px;'});t2.textContent='203.0.113.80';hopSvg.appendChild(t2);
+  const t3=el('text',{x:hz.OUT.x,y:hz.OUT.y+19,class:'mac','text-anchor':'middle',style:'font-size:9.5px;'});t3.textContent='EE:99';hopSvg.appendChild(t3);
+}
+drawHop();
+const hopLog=document.getElementById('hopLog');
+function setFrame(eth,ip,flashEth){
+  const e=document.getElementById('ethVal'), i=document.getElementById('ipVal');
+  e.textContent=eth; i.textContent=ip;
+  if(flashEth){e.classList.remove('flash'); void e.offsetWidth; e.classList.add('flash');}
+}
+let hopBusy=false;
+document.getElementById('hopBtn').onclick=async()=>{
+  if(hopBusy)return; hopBusy=true;
+  document.getElementById('hopBtn').disabled=true;
+  hopLog.innerHTML='';
+  drawHop();
+  setFrame('—','—');
+
+  logLine(hopLog,'dim','PC wants 203.0.113.80. It already has the router\'s MAC cached from an earlier ARP exchange (see section 1) — no new ARP needed here.');
+  logLine(hopLog,'dim','the IP header is fixed for the whole trip:');
+  setFrame('—','10.0.0.10 → 203.0.113.80',true);
+
+  await waitNext('hopNext');
+  logLine(hopLog,'send','PC wraps that IP packet in an Ethernet frame addressed for the first hop only:');
+  setFrame('AA:10 → AA:01','10.0.0.10 → 203.0.113.80',true);
+
+  await waitNext('hopNext');
+  logLine(hopLog,'send','hop 1 — the frame crosses the LAN to the router:');
+  await packet(hopSvg,hz.PC,hz.R,'var(--cyan)',null,'AA:10 → AA:01');
+  flashNode(hopSvg,'R','active');
+
+  await waitNext('hopNext');
+  logLine(hopLog,'dim','router receives it, strips the Ethernet header entirely, and reads only the IP header to decide where this goes next.');
+  logLine(hopLog,'dim','the IP header is never touched — it passes straight through unchanged.');
+  setFrame('(stripped)','10.0.0.10 → 203.0.113.80');
+
+  await waitNext('hopNext');
+  logLine(hopLog,'send','router rebuilds a brand-new Ethernet header for the next wire — its own MAC as source, the outside server\'s MAC as destination:');
+  setFrame('AA:01 → EE:99','10.0.0.10 → 203.0.113.80',true);
+
+  await waitNext('hopNext');
+  logLine(hopLog,'send','hop 2 — the re-wrapped frame travels on to the outside server:');
+  await packet(hopSvg,hz.R,hz.OUT,'var(--cyan)',null,'AA:01 → EE:99');
+
+  await waitNext('hopNext');
+  logLine(hopLog,'dim','the outside server never once sees PC\'s real MAC (AA:10) — only AA:01 → EE:99. The IP header is the only thing that still says 10.0.0.10.');
+  logLine(hopLog,'dim','that\'s the rule: MAC addresses are rewritten every hop, IP addresses travel end-to-end unchanged.');
+
+  document.getElementById('hopNext').disabled=true;
+  document.getElementById('hopNext').classList.remove('ready');
+  document.getElementById('hopBtn').disabled=false;
+  hopBusy=false;
+};
+
+hookNextBtn('lanNext');
+hookNextBtn('poisonNext');
+hookNextBtn('hopNext');
+</script>
+</body>
+</html>
